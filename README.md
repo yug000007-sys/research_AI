@@ -1,45 +1,25 @@
-# Smart Company Researcher
+# Company Research Workstation v3
 
-A single-record company enrichment app for Streamlit Cloud.
+Modular Streamlit app for single-record company research.
 
-## What this version does
+## Features
+- Company + Address + City + State + Zip + Country input
+- Candidate finder with up to 10 possible matches
+- Candidate table with parsed fields
+- Use Candidate button to overwrite final fields
+- Manual paste parser for Google/Maps/directory text
+- Phone formatting: USA/Canada `xxx-xxx-xxxx`, other countries start with dialing code
+- Website formatting: `www.domain.com`
+- USA/Canada state/province abbreviations
+- Quality gate before saving
+- Save / Save Anyway
+- Export CSV and Excel-openable XLS
 
-- Researches one company at a time
-- Uses multiple search queries
-- Builds candidate company matches
-- Scores candidates by:
-  - company match
-  - city/country match
-  - zip/state match
-  - source/domain quality
-- Selects best candidate
-- Extracts:
-  - Address
-  - City
-  - State
-  - Zip
-  - Country
-  - Phone
-  - Website
-  - SIC/NAICS estimate
-  - Line of business
-- Shows candidate table for review
-- Supports manual correction
-- Saves records
-- Exports CSV or Excel-openable XLS
-
-## Deploy on Streamlit Cloud
-
-Upload only these files to the GitHub repo root:
-
+## Streamlit Cloud
+Upload all files/folders to GitHub repo root:
 - app.py
 - requirements.txt
 - README.md
+- modules/
 
-Main file path:
-
-app.py
-
-## Important
-
-This is a free-source enrichment helper, not a guaranteed database. Always review candidate matches before saving.
+Main file path: `app.py`
