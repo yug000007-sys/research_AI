@@ -33,7 +33,7 @@ BAD_DOMAINS = [
     "google.", "duckduckgo.", "facebook.", "linkedin.", "twitter.", "x.com",
     "instagram.", "youtube.", "bloomberg.", "dnb.", "zoominfo.", "yelp.",
     "mapquest.", "wikipedia.", "crunchbase.", "glassdoor.", "indeed.",
-    "rocketreach.", "apollo.io", "signalhire.", "lusha."
+    "rocketreach.", "apollo.io", "signalhire.", "lusha.", "b2bhint."
 ]
 
 KNOWN_OVERRIDES = {
@@ -84,6 +84,10 @@ def make_search_query(company, city, state, zip_code, country):
 
 def google_search_url(query):
     return "https://www.google.com/search?q=" + quote_plus(query)
+
+def google_maps_url(company, city, state, zip_code, country):
+    query = " ".join([x for x in [company, city, state, zip_code, country] if x])
+    return "https://www.google.com/maps/search/" + quote_plus(query)
 
 def override_match(company, city, country):
     c = company.lower().strip()
@@ -281,29 +285,119 @@ def find_phone(text):
                 return phone
     return "Needs research"
 
+def is_bad_address_snippet(snippet):
+    bad_phrases = [
+        "login required", "download or request", "followers", "reviews", "read more",
+        "not in process of liquidation", "available options", "account access",
+        "company profile", "b2bhint", "linkedin", "copyright", "privacy policy",
+        "terms of service", "cookie", "sign in", "register", "search result",
+    ]
+    low = snippet.lower()
+    return any(p in low for p in bad_phrases)
+
+def address_score(snippet, city, state, zip_code, country):
+    low = snippet.lower()
+    score = 0
+
+    address_words = [
+        "street", " st ", " st.", "road", " rd ", " rd.", "drive", " dr ", " dr.",
+        "avenue", " ave ", " ave.", "lane", "boulevard", "blvd", "building",
+        "warehouse", "office", "floor", "suite", "unit", "po box", "p.o.",
+        "industrial", "city", "area", "district", "free zone", "business park",
+    ]
+
+    if any(w in low for w in address_words):
+        score += 35
+    if re.search(r"\b\d{1,6}[A-Za-z]?\b", snippet):
+        score += 20
+    if city and city.lower() in low:
+        score += 20
+    if state and state.lower() in low:
+        score += 10
+    if zip_code and zip_code.lower() in low:
+        score += 25
+    if country and country.lower() in low:
+        score += 10
+    if is_bad_address_snippet(snippet):
+        score -= 60
+    if len(snippet) > 240:
+        score -= 10
+
+    return score
+
+def clean_address_snippet(snippet):
+    snippet = re.sub(r"\s+", " ", snippet).strip()
+    remove_prefixes = [
+        "Address:", "address:", "Location:", "location:", "Registered address:",
+        "Office:", "Head Office:", "Contact:"
+    ]
+    for p in remove_prefixes:
+        snippet = snippet.replace(p, "").strip()
+    # Stop before junk phrases.
+    stop_words = [" Login ", " Read more", " Suggest an edit", " Own this business", " Add missing information"]
+    for sw in stop_words:
+        pos = snippet.find(sw)
+        if pos > 20:
+            snippet = snippet[:pos].strip()
+    return snippet.strip(" -|,;")[:220]
+
 def find_address(text, city, state, zip_code, country):
+    candidates = []
+
+    # 1) Extract direct "Address:" lines first.
+    for m in re.finditer(r"(Address|Registered Address|Location|Office|Head Office)\s*[:\-]\s*([^\.]{20,220})", text, flags=re.I):
+        candidates.append(m.group(2))
+
+    # 2) Snippets around location tokens.
     tokens = [x for x in [zip_code, city, state, country] if x]
-    best = ""
     low = text.lower()
     for token in tokens:
-        idx = low.find(token.lower())
-        if idx >= 0:
-            snippet = text[max(0, idx - 160): min(len(text), idx + 220)]
-            snippet = re.sub(r"\s+", " ", snippet).strip()
-            if len(snippet) > len(best):
-                best = snippet
+        start = 0
+        token_low = token.lower()
+        while True:
+            idx = low.find(token_low, start)
+            if idx < 0:
+                break
+            snippet = text[max(0, idx - 120): min(len(text), idx + 180)]
+            candidates.append(snippet)
+            start = idx + len(token_low)
 
-    if not best:
-        m = re.search(r"([A-Z0-9][A-Za-z0-9\-\.,#\s]{10,120}(Street|St\.|Road|Rd\.|Drive|Dr\.|Avenue|Ave\.|Lane|Ln\.|Boulevard|Blvd\.|Industrial|Building|Floor)[A-Za-z0-9\-\.,#\s]{0,120})", text)
-        if m:
-            best = m.group(1)
+    # 3) Structured street-like addresses.
+    street_regexes = [
+        r"([A-Za-z0-9#,\-/\s]{5,120}\b(?:Street|St\.|Road|Rd\.|Drive|Dr\.|Avenue|Ave\.|Lane|Ln\.|Boulevard|Blvd\.|Building|Warehouse|Floor|Suite|Unit|Industrial|Business Park|Free Zone)\b[A-Za-z0-9,\-/\s]{0,120})",
+        r"([A-Za-z0-9#,\-/\s]{5,120}\b(?:P\.?O\.?\s*Box|PO Box)\b[A-Za-z0-9,\-/\s]{0,80})",
+        r"([A-Za-z0-9#,\-/\s]{5,120}\b(?:Dubai International City|Warsan First|Jebel Ali|Al Jaddaf|Drydocks)\b[A-Za-z0-9,\-/\s]{0,120})",
+    ]
+    for rgx in street_regexes:
+        for m in re.finditer(rgx, text, flags=re.I):
+            candidates.append(m.group(1))
 
-    return best[:300] if len(best) >= 30 else "Needs research"
+    scored = []
+    for c in candidates:
+        c = clean_address_snippet(c)
+        if len(c) < 20:
+            continue
+        score = address_score(c, city, state, zip_code, country)
+        scored.append((score, c))
+
+    if not scored:
+        return "Needs research"
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+    best_score, best = scored[0]
+
+    # Important: do not accept weak/bad snippets as an address.
+    if best_score < 25:
+        return "Needs research"
+
+    return best
 
 def classify(company, website, page_text):
     text = (company + " " + website + " " + page_text[:5000]).lower()
     if any(x in text for x in ["boeing", "aerospace", "aircraft", "aviation", "defense", "missile"]):
         return "3721 / 3761", "336411 / 336414", "Aerospace and defense manufacturing, engineering, and support services."
+    if any(x in text for x in ["marine", "maritime", "ship", "vessel", "propulsion"]):
+        return "3731 / 4499", "336611 / 488390", "Marine, maritime, vessel technology, or related services."
     if any(x in text for x in ["electronics", "electronic", "semiconductor", "pcb", "electromechanical"]):
         return "3679 / 3672", "334418 / 334419", "Electronic components, assemblies, or related manufacturing/services."
     if any(x in text for x in ["software", "saas", "technology", "cloud", "cybersecurity"]):
@@ -337,19 +431,20 @@ def score_confidence(company, city, zip_code, country, website, address, phone, 
         return "Medium"
     return "Low"
 
-def research_company(company, city, state, zip_code, country, show_logs=True):
+def research_company(company, city, state, zip_code, country):
     ov = override_match(company, city, country)
     if ov:
         return ov, ["Known override matched."]
 
     query = make_search_query(company, city, state, zip_code, country)
     source_url = google_search_url(query)
-    logs = [f"Query: {query}"]
+    maps_url = google_maps_url(company, city, state, zip_code, country)
+    logs = [f"Query: {query}", f"Google Maps URL: {maps_url}"]
 
     results = search_all(query)
     logs.append(f"Search results found: {len(results)}")
-    for r in results[:3]:
-        logs.append(f"- {r.get('source','?')}: {r.get('title','')[:80]} | {r.get('href','')[:100]}")
+    for r in results[:5]:
+        logs.append(f"- {r.get('source','?')}: {r.get('title','')[:90]} | {r.get('href','')[:110]}")
 
     website, website_source = find_best_website(company, country, results)
     logs.append(f"Website selected: {website}")
@@ -366,10 +461,10 @@ def research_company(company, city, state, zip_code, country, show_logs=True):
     conf = score_confidence(company, city, zip_code, country, website, address, phone, results)
 
     remarks = "Auto-enriched using free search fallbacks. Review before final use."
-    if website == "Needs research":
-        remarks = "No reliable website found. Try adding city/zip or review SourceURL."
-    elif address == "Needs research" or phone == "Needs research":
-        remarks = "Website found, but some fields were not extracted. Review SourceURL."
+    if address == "Needs research":
+        remarks = "Address not safely extracted. Use Google Maps URL and paste into Manual Google Address box."
+    elif phone == "Needs research":
+        remarks = "Address extracted, but phone not found. Review SourceURL."
 
     output = {
         "Company": company,
@@ -413,11 +508,13 @@ def init_state():
         st.session_state.current_result = None
     if "logs" not in st.session_state:
         st.session_state.logs = []
+    if "maps_url" not in st.session_state:
+        st.session_state.maps_url = ""
 
 init_state()
 
 st.title("Single Company Research Tool")
-st.caption("Research one company, edit fields, save records, then export CSV/XLS.")
+st.caption("Research one company, clean/edit fields, save records, then export CSV/XLS.")
 
 tab1, tab2, tab3 = st.tabs(["Research Single Company", "Saved Records", "Export"])
 
@@ -431,12 +528,15 @@ with tab1:
         state = st.text_input("State", value="")
         zip_code = st.text_input("Zip", value="")
         country = st.text_input("Country", value="")
-
         run = st.button("Research Company", type="primary")
 
     with col2:
-        st.subheader("Quick Examples")
-        st.code("Boeing | Tanner | AL | 35671 | USA\nBoeing | Wacol | Australia\nBoel | Osaka-Shi | Japan")
+        st.subheader("Google helper")
+        helper_query = " ".join([x for x in [company, city, state, zip_code, country] if x])
+        if helper_query:
+            st.link_button("Open Google Search", google_search_url(helper_query + " address phone website"))
+            st.link_button("Open Google Maps", google_maps_url(company, city, state, zip_code, country))
+        st.caption("If the address appears in Google Maps/Business panel, paste it below after research.")
 
     if run:
         if not clean(company):
@@ -446,9 +546,20 @@ with tab1:
                 result, logs = research_company(clean(company), clean(city), clean(state), clean(zip_code), clean(country))
                 st.session_state.current_result = result
                 st.session_state.logs = logs
+                st.session_state.maps_url = google_maps_url(company, city, state, zip_code, country)
 
     if st.session_state.current_result:
         st.divider()
+        st.subheader("Manual correction from Google panel")
+        manual_addr = st.text_input("Manual Google Address (optional)", value="")
+        if st.button("Use Manual Address"):
+            if manual_addr.strip():
+                st.session_state.current_result["Address"] = manual_addr.strip()
+                st.session_state.current_result["Remarks"] = "Address manually corrected from Google panel."
+                st.success("Manual address applied.")
+            else:
+                st.warning("Paste an address first.")
+
         st.subheader("Research Result - Edit Before Saving")
 
         edited = {}

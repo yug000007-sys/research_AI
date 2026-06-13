@@ -1,25 +1,12 @@
-# Single Company Research Tool
+# Single Company Research Tool v2 - Clean Address
 
-Streamlit app for researching one company at a time.
+Fixes:
+- Does not accept bad snippets like login/download/company profile text as address
+- Uses address scoring
+- Adds Google Search and Google Maps buttons
+- Adds Manual Google Address field for quick correction
+- Saves corrected records and exports CSV/XLS
 
-## Features
-
-- Single company input form
-- Research button
-- Editable output fields
-- Save record
-- Saved records tab
-- Export CSV
-- Export Excel-openable XLS
-
-## Deploy on Streamlit Cloud
-
-Upload only these files to GitHub root:
-
-- app.py
-- requirements.txt
-- README.md
-
-Streamlit main file path:
-
-app.py
+Deploy:
+Upload only app.py, requirements.txt, README.md to GitHub root.
+Streamlit main file path: app.py
