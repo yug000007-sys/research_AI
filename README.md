@@ -1,12 +1,14 @@
-# Single Company Research Tool v2 - Clean Address
+# Single Company Research Tool v3
 
-Fixes:
-- Does not accept bad snippets like login/download/company profile text as address
-- Uses address scoring
-- Adds Google Search and Google Maps buttons
-- Adds Manual Google Address field for quick correction
-- Saves corrected records and exports CSV/XLS
+Fixes address formatting:
+- cuts phone/company-directory junk
+- rejects bad snippets
+- supports Vietnam/UAE-style address markers
+- keeps Manual Google Address correction
 
-Deploy:
-Upload only app.py, requirements.txt, README.md to GitHub root.
-Streamlit main file path: app.py
+Upload only:
+- app.py
+- requirements.txt
+- README.md
+
+Main file path: app.py
