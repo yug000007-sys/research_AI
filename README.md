@@ -1,26 +1,23 @@
-# Company Enrichment Tool - Fastest Streamlit Cloud Version
+# Company Enrichment Tool - Step 2 Website Finder
 
-This version avoids pandas/openpyxl so Streamlit Cloud deploys quickly.
+Upload CSV, find likely company website using public search, calculate confidence, and download CSV/XLS.
 
-## Upload ONLY these files to a fresh GitHub repo
+## Upload to GitHub root
 
 - app.py
 - requirements.txt
 - README.md
 
-## Streamlit Cloud setting
+## Streamlit Cloud
 
 Main file path:
 
 app.py
 
-## Input
-
-Use CSV file with columns:
+## Input CSV columns
 
 Company, City, State, Zip, Country
 
-## Output
+## Recommended free-tier usage
 
-- CSV
-- Excel-openable XLS
+Start with 5-20 rows. Public search can rate-limit large batches.
