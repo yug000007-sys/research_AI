@@ -8,11 +8,7 @@ from urllib.parse import quote_plus, urlparse, urljoin
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="Company Enrichment Tool", layout="wide")
-
-st.title("Company Enrichment Tool - Step 4 Real Search")
-st.success("App loaded successfully.")
-st.write("This version uses multiple free search fallbacks and shows debug results.")
+st.set_page_config(page_title="Single Company Research Tool", layout="wide")
 
 OUTPUT_COLUMNS = [
     "Company",
@@ -82,23 +78,6 @@ KNOWN_OVERRIDES = {
 def clean(value):
     return str(value or "").strip()
 
-def normalize_key(key):
-    return str(key or "").strip().lower().replace(" ", "").replace("_", "")
-
-def get_value(row, target):
-    aliases = {
-        "Company": ["company", "companyname", "name"],
-        "City": ["city", "town"],
-        "State": ["state", "province", "region"],
-        "Zip": ["zip", "zipcode", "postal", "postalcode", "postcode"],
-        "Country": ["country", "nation"],
-    }
-    wanted = aliases.get(target, [target.lower()])
-    for k, v in row.items():
-        if normalize_key(k) in wanted:
-            return clean(v)
-    return ""
-
 def make_search_query(company, city, state, zip_code, country):
     parts = [company, city, state, zip_code, country, "official address phone website"]
     return " ".join([p for p in parts if p]).strip()
@@ -136,14 +115,12 @@ def strip_html(text):
     return " ".join(text.split())
 
 def jina_search(query, timeout=10):
-    # Public search endpoint. If blocked/unavailable, returns empty.
     url = "https://s.jina.ai/?q=" + quote_plus(query)
     text = http_get(url, timeout=timeout)
     results = []
     if not text:
         return results
 
-    # Extract URLs from markdown/plain text.
     urls = re.findall(r"https?://[^\s\)\]\}<>\"']+", text)
     titles = re.findall(r"Title:\s*(.+)", text)
     snippets = re.findall(r"Description:\s*(.+)", text)
@@ -163,11 +140,11 @@ def jina_search(query, timeout=10):
         if len(results) >= 8:
             break
 
-    # Alternate markdown link extraction.
     if not results:
         links = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", text)
         for title, url in links[:8]:
             results.append({"title": title, "href": url, "body": "", "source": "jina"})
+
     return results
 
 def ddg_search_html(query, max_results=6, timeout=8):
@@ -226,19 +203,14 @@ def domain_guesses(company, country):
         return guesses
     country_low = country.lower()
     if "japan" in country_low:
-        guesses.append(f"https://www.{base}.co.jp")
-        guesses.append(f"https://{base}.co.jp")
+        guesses += [f"https://www.{base}.co.jp", f"https://{base}.co.jp"]
     if "australia" in country_low:
-        guesses.append(f"https://www.{base}.com.au")
-        guesses.append(f"https://{base}.com.au")
+        guesses += [f"https://www.{base}.com.au", f"https://{base}.com.au"]
     if "germany" in country_low:
-        guesses.append(f"https://www.{base}.de")
-        guesses.append(f"https://{base}.de")
+        guesses += [f"https://www.{base}.de", f"https://{base}.de"]
     if "china" in country_low:
-        guesses.append(f"https://www.{base}.cn")
-        guesses.append(f"https://{base}.cn")
-    guesses.append(f"https://www.{base}.com")
-    guesses.append(f"https://{base}.com")
+        guesses += [f"https://www.{base}.cn", f"https://{base}.cn"]
+    guesses += [f"https://www.{base}.com", f"https://{base}.com"]
     return guesses
 
 def find_best_website(company, country, results):
@@ -281,11 +253,6 @@ def fetch_page_text(url, timeout=7):
     if not url or not url.startswith("http"):
         return ""
     text = http_get(url, timeout=timeout)
-    if not text:
-        # Try Jina reader as fallback.
-        text = http_get("https://r.jina.ai/http://r.jina.ai/http://"+url, timeout=timeout)
-        if not text:
-            text = http_get("https://r.jina.ai/http://"+url, timeout=timeout)
     return strip_html(text)[:30000] if text else ""
 
 def read_website(website):
@@ -315,7 +282,6 @@ def find_phone(text):
     return "Needs research"
 
 def find_address(text, city, state, zip_code, country):
-    # Prefer snippets around zip/city/country.
     tokens = [x for x in [zip_code, city, state, country] if x]
     best = ""
     low = text.lower()
@@ -327,7 +293,6 @@ def find_address(text, city, state, zip_code, country):
             if len(snippet) > len(best):
                 best = snippet
 
-    # Common address terms fallback.
     if not best:
         m = re.search(r"([A-Z0-9][A-Za-z0-9\-\.,#\s]{10,120}(Street|St\.|Road|Rd\.|Drive|Dr\.|Avenue|Ave\.|Lane|Ln\.|Boulevard|Blvd\.|Industrial|Building|Floor)[A-Za-z0-9\-\.,#\s]{0,120})", text)
         if m:
@@ -372,13 +337,7 @@ def score_confidence(company, city, zip_code, country, website, address, phone, 
         return "Medium"
     return "Low"
 
-def enrich(row, debug=False):
-    company = get_value(row, "Company")
-    city = get_value(row, "City")
-    state = get_value(row, "State")
-    zip_code = get_value(row, "Zip")
-    country = get_value(row, "Country")
-
+def research_company(company, city, state, zip_code, country, show_logs=True):
     ov = override_match(company, city, country)
     if ov:
         return ov, ["Known override matched."]
@@ -447,78 +406,97 @@ def rows_to_excel_html(rows):
     table.append("</table></body></html>")
     return "\n".join(table).encode("utf-8")
 
-with st.sidebar:
-    st.header("Settings")
-    debug_mode = st.checkbox("Show debug logs", value=True)
-    delay = st.number_input("Delay per row", 0.0, 3.0, 0.2, 0.1)
-    st.caption("Test 1-5 rows first.")
+def init_state():
+    if "saved_records" not in st.session_state:
+        st.session_state.saved_records = []
+    if "current_result" not in st.session_state:
+        st.session_state.current_result = None
+    if "logs" not in st.session_state:
+        st.session_state.logs = []
 
-sample_csv = "Company,City,State,Zip,Country\nBoeing,Wacol,,,Australia\nBoeing,Tanner,AL,35671,USA\nBoel,Osaka-Shi,,,Japan\n"
-uploaded = st.file_uploader("Upload CSV file", type=["csv"])
+init_state()
 
-if uploaded is None:
-    st.subheader("Sample CSV")
-    st.code(sample_csv)
-    st.download_button("Download sample CSV", sample_csv.encode("utf-8"), "sample_input.csv", "text/csv")
-else:
-    content = uploaded.read().decode("utf-8-sig", errors="replace")
-    input_rows = list(csv.DictReader(io.StringIO(content)))
+st.title("Single Company Research Tool")
+st.caption("Research one company, edit fields, save records, then export CSV/XLS.")
 
-    if not input_rows:
-        st.error("CSV is empty or headers are missing.")
-        st.stop()
+tab1, tab2, tab3 = st.tabs(["Research Single Company", "Saved Records", "Export"])
 
-    st.write(f"Rows loaded: {len(input_rows)}")
-    st.table(input_rows[:10])
-    rows_to_process = st.number_input("Rows to process now", 1, len(input_rows), min(len(input_rows), 5), 1)
+with tab1:
+    col1, col2 = st.columns(2)
 
-    if st.button("Run enrichment"):
-        output_rows = []
-        progress = st.progress(0)
-        status = st.empty()
-        log_box = st.empty()
-        all_logs = []
+    with col1:
+        st.subheader("Input")
+        company = st.text_input("Company", value="")
+        city = st.text_input("City", value="")
+        state = st.text_input("State", value="")
+        zip_code = st.text_input("Zip", value="")
+        country = st.text_input("Country", value="")
 
-        selected = input_rows[:rows_to_process]
-        for idx, row in enumerate(selected, start=1):
-            company = get_value(row, "Company")
-            status.write(f"Processing {idx}/{len(selected)}: {company}")
-            try:
-                out, logs = enrich(row, debug=debug_mode)
-            except Exception as e:
-                out = {
-                    "Company": company,
-                    "Address": "Needs research",
-                    "City": get_value(row, "City") or "Needs research",
-                    "State": get_value(row, "State") or "Needs research",
-                    "Zip": get_value(row, "Zip") or "Needs research",
-                    "Country": get_value(row, "Country") or "Needs research",
-                    "PhoneResearch": "Needs research",
-                    "Website": "Needs research",
-                    "SIC": "Needs classification",
-                    "NAICS": "Needs classification",
-                    "NoOfEmployees(This site only)": "Not publicly disclosed",
-                    "LineOfBusiness": "Needs research",
-                    "ParentName": "Needs research",
-                    "Confidence": "Low",
-                    "SourceURL": google_search_url(make_search_query(company, get_value(row,"City"), get_value(row,"State"), get_value(row,"Zip"), get_value(row,"Country"))),
-                    "Remarks": "Row error: " + str(e)[:150],
-                }
-                logs = ["Error: " + str(e)]
+        run = st.button("Research Company", type="primary")
 
-            output_rows.append(out)
-            all_logs.extend([f"### {company}"] + logs)
-            if debug_mode:
-                log_box.markdown("\n\n".join(all_logs[-30:]))
-            progress.progress(idx / len(selected))
-            time.sleep(delay)
+    with col2:
+        st.subheader("Quick Examples")
+        st.code("Boeing | Tanner | AL | 35671 | USA\nBoeing | Wacol | Australia\nBoel | Osaka-Shi | Japan")
 
-        status.write("Finished.")
-        st.success("Output generated.")
-        st.subheader("Output preview")
-        st.table(output_rows[:20])
+    if run:
+        if not clean(company):
+            st.error("Company is required.")
+        else:
+            with st.spinner("Researching company..."):
+                result, logs = research_company(clean(company), clean(city), clean(state), clean(zip_code), clean(country))
+                st.session_state.current_result = result
+                st.session_state.logs = logs
 
-        st.download_button("Download CSV", rows_to_csv(output_rows), "company_enrichment_output.csv", "text/csv")
-        st.download_button("Download Excel-openable XLS", rows_to_excel_html(output_rows), "company_enrichment_output.xls", "application/vnd.ms-excel")
+    if st.session_state.current_result:
+        st.divider()
+        st.subheader("Research Result - Edit Before Saving")
 
-st.info("If results are still empty, debug logs will show whether search is blocked on Streamlit Cloud.")
+        edited = {}
+        for col in OUTPUT_COLUMNS:
+            if col in ["LineOfBusiness", "Remarks", "Address"]:
+                edited[col] = st.text_area(col, value=clean(st.session_state.current_result.get(col, "")), height=80)
+            else:
+                edited[col] = st.text_input(col, value=clean(st.session_state.current_result.get(col, "")))
+
+        save_col, clear_col = st.columns(2)
+        with save_col:
+            if st.button("Save Record"):
+                st.session_state.saved_records.append(edited.copy())
+                st.success("Record saved.")
+        with clear_col:
+            if st.button("Clear Current Result"):
+                st.session_state.current_result = None
+                st.session_state.logs = []
+                st.rerun()
+
+        with st.expander("Debug logs", expanded=False):
+            st.write("\n".join(st.session_state.logs))
+
+with tab2:
+    st.subheader("Saved Records")
+    if not st.session_state.saved_records:
+        st.info("No saved records yet.")
+    else:
+        st.write(f"Saved records: {len(st.session_state.saved_records)}")
+        st.table(st.session_state.saved_records)
+
+        delete_index = st.number_input("Delete record number", min_value=1, max_value=len(st.session_state.saved_records), value=1, step=1)
+        if st.button("Delete Selected Record"):
+            st.session_state.saved_records.pop(delete_index - 1)
+            st.success("Deleted.")
+            st.rerun()
+
+        if st.button("Clear All Saved Records"):
+            st.session_state.saved_records = []
+            st.success("All records cleared.")
+            st.rerun()
+
+with tab3:
+    st.subheader("Export")
+    if not st.session_state.saved_records:
+        st.info("Save at least one record to export.")
+    else:
+        rows = st.session_state.saved_records
+        st.download_button("Download CSV", rows_to_csv(rows), "company_research_records.csv", "text/csv")
+        st.download_button("Download Excel-openable XLS", rows_to_excel_html(rows), "company_research_records.xls", "application/vnd.ms-excel")
+        st.success("Export ready.")

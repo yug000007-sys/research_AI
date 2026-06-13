@@ -1,18 +1,25 @@
-# Company Enrichment Tool - Step 4 Real Search
+# Single Company Research Tool
 
-This version uses:
-- Jina public search fallback
-- DuckDuckGo fallback
-- Domain guessing
-- Website reader
-- Phone/address extraction
-- Debug logs
-- Built-in known overrides for tested records
+Streamlit app for researching one company at a time.
+
+## Features
+
+- Single company input form
+- Research button
+- Editable output fields
+- Save record
+- Saved records tab
+- Export CSV
+- Export Excel-openable XLS
+
+## Deploy on Streamlit Cloud
 
 Upload only these files to GitHub root:
+
 - app.py
 - requirements.txt
 - README.md
 
 Streamlit main file path:
+
 app.py
