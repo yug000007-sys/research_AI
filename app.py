@@ -3,16 +3,16 @@ import html
 import io
 import re
 import time
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, urljoin
 
 import requests
 import streamlit as st
 
 st.set_page_config(page_title="Company Enrichment Tool", layout="wide")
 
-st.title("Company Enrichment Tool - Step 2")
+st.title("Company Enrichment Tool - Step 3")
 st.success("App loaded successfully.")
-st.write("CSV upload → website finder → confidence score → downloadable output.")
+st.write("CSV upload → website finder → phone/address extraction → confidence score → downloadable output.")
 
 OUTPUT_COLUMNS = [
     "Company",
@@ -51,6 +51,8 @@ BAD_DOMAINS = [
     "crunchbase.",
 ]
 
+CONTACT_PATHS = ["/contact", "/contact-us", "/contacts", "/about", "/about-us", "/locations", "/location"]
+
 def clean(value):
     return str(value or "").strip()
 
@@ -80,20 +82,15 @@ def google_search_url(query):
 
 def ddg_search_html(query, max_results=8):
     url = "https://duckduckgo.com/html/?q=" + quote_plus(query)
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
     results = []
     try:
         r = requests.get(url, headers=headers, timeout=12)
         text = r.text or ""
-        # Simple robust extraction from DuckDuckGo HTML.
         links = re.findall(r'<a rel="nofollow" class="result__a" href="(.*?)">(.*?)</a>', text, flags=re.S)
         snippets = re.findall(r'<a class="result__snippet".*?>(.*?)</a>|<div class="result__snippet".*?>(.*?)</div>', text, flags=re.S)
         for idx, (href, title_html) in enumerate(links[:max_results]):
-            title = re.sub("<.*?>", " ", title_html)
-            title = html.unescape(" ".join(title.split()))
+            title = html.unescape(" ".join(re.sub("<.*?>", " ", title_html).split()))
             body = ""
             if idx < len(snippets):
                 snip = snippets[idx][0] or snippets[idx][1]
@@ -123,20 +120,15 @@ def extract_domain_url(url):
 def find_best_website(company, results):
     company_tokens = [t for t in re.split(r"[^a-z0-9]+", company.lower()) if len(t) >= 3]
     candidates = []
-
     for result in results:
         href = result.get("href", "")
         title = result.get("title", "")
         body = result.get("body", "")
-        if not href.startswith("http"):
+        if not href.startswith("http") or domain_is_bad(href):
             continue
-        if domain_is_bad(href):
-            continue
-
         domain_url = extract_domain_url(href)
         domain = urlparse(domain_url).netloc.lower()
         score = 0
-
         for token in company_tokens:
             if token in domain:
                 score += 40
@@ -144,56 +136,112 @@ def find_best_website(company, results):
                 score += 20
             if token in body.lower():
                 score += 10
-
         if "official" in (title + " " + body).lower():
             score += 10
-
-        candidates.append((score, domain_url, href, title))
-
+        candidates.append((score, domain_url, href))
     if not candidates:
         return "Needs research", ""
-
     candidates.sort(reverse=True, key=lambda x: x[0])
-    score, domain_url, href, title = candidates[0]
-    return domain_url or "Needs research", href
+    return candidates[0][1] or "Needs research", candidates[0][2]
 
-def classify_confidence(company, city, zip_code, country, website, results):
-    combined = " ".join(
-        (r.get("title", "") + " " + r.get("body", "") + " " + r.get("href", ""))
-        for r in results
-    ).lower()
+def fetch_text(url):
+    if not url or not url.startswith("http"):
+        return ""
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code >= 400:
+            return ""
+        text = r.text or ""
+        text = re.sub(r"<script.*?</script>", " ", text, flags=re.S|re.I)
+        text = re.sub(r"<style.*?</style>", " ", text, flags=re.S|re.I)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
+        text = " ".join(text.split())
+        return text[:25000]
+    except Exception:
+        return ""
 
+def read_website_pages(website):
+    if not website or website == "Needs research":
+        return ""
+    texts = []
+    texts.append(fetch_text(website))
+    for path in CONTACT_PATHS[:5]:
+        texts.append(fetch_text(urljoin(website, path)))
+        time.sleep(0.1)
+    return " ".join([t for t in texts if t])[:50000]
+
+def find_phone(text):
+    patterns = [
+        r"\+\d{1,3}[\s\-.]?\(?\d{1,5}\)?[\s\-.]?\d{2,5}[\s\-.]?\d{2,5}[\s\-.]?\d{2,6}",
+        r"\(?\d{3}\)?[\s\-.]\d{3}[\s\-.]\d{4}",
+        r"\d{2,5}[\s\-.]\d{2,5}[\s\-.]\d{3,5}",
+    ]
+    blocked = ["000-000", "123-456", "555-555"]
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for m in matches:
+            phone = clean(m)
+            if not any(b in phone for b in blocked):
+                return phone
+    return "Needs research"
+
+def find_address(text, city, state, zip_code, country):
+    tokens = [x for x in [zip_code, city, state, country] if x]
+    if not tokens:
+        return "Needs research"
+    best = ""
+    low = text.lower()
+    for token in tokens:
+        idx = low.find(token.lower())
+        if idx >= 0:
+            snippet = text[max(0, idx - 140): min(len(text), idx + 220)]
+            snippet = re.sub(r"\s+", " ", snippet).strip()
+            if len(snippet) > len(best):
+                best = snippet
+    if best and len(best) >= 30:
+        return best[:300]
+    return "Needs research"
+
+def classify_confidence(company, city, zip_code, country, website, address, phone, results):
+    combined = " ".join((r.get("title", "") + " " + r.get("body", "") + " " + r.get("href", "")) for r in results).lower()
     score = 0
     if company and company.lower().split()[0] in combined:
-        score += 30
+        score += 25
     if city and city.lower() in combined:
-        score += 20
+        score += 15
     if zip_code and zip_code.lower() in combined:
-        score += 20
+        score += 15
     if country and country.lower() in combined:
         score += 10
     if website and website != "Needs research":
-        score += 20
-
-    if score >= 70:
+        score += 15
+    if address and address != "Needs research":
+        score += 10
+    if phone and phone != "Needs research":
+        score += 10
+    if score >= 75:
         return "High"
-    if score >= 40:
+    if score >= 45:
         return "Medium"
     return "Low"
 
-def classify_sic_naics(company, website):
-    text = (company + " " + website).lower()
-    if any(x in text for x in ["boeing", "aerospace", "aircraft", "aviation", "defense"]):
+def classify_sic_naics(company, website, page_text):
+    text = (company + " " + website + " " + page_text[:4000]).lower()
+    if any(x in text for x in ["boeing", "aerospace", "aircraft", "aviation", "defense", "missile"]):
         return "3721 / 3761", "336411 / 336414", "Aerospace and defense manufacturing, engineering, and support services."
-    if any(x in text for x in ["software", "tech", "systems", "it"]):
+    if any(x in text for x in ["software", "saas", "technology", "cloud", "cybersecurity", "it services"]):
         return "7372 / 7373", "541511 / 541512", "Software, IT, or technology services."
-    if any(x in text for x in ["logistics", "freight", "transport"]):
-        return "4731", "488510", "Logistics, freight, and transportation services."
-    if any(x in text for x in ["consulting", "consultant"]):
+    if any(x in text for x in ["logistics", "freight", "transport", "warehouse"]):
+        return "4731 / 4225", "488510 / 493110", "Logistics, freight, warehousing, and transportation services."
+    if any(x in text for x in ["consulting", "consultant", "advisory"]):
         return "8742 / 8748", "541611", "Business or management consulting services."
+    if any(x in text for x in ["manufacturing", "manufacturer", "factory", "industrial"]):
+        return "3999 / 3599", "339999 / 333249", "Manufacturing or industrial operations."
     return "Needs classification", "Needs classification", "Needs research"
 
-def create_output_row(row, enable_search, delay):
+def create_output_row(row, enable_search, enable_page_read, delay):
     company = get_value(row, "Company")
     city = get_value(row, "City")
     state = get_value(row, "State")
@@ -202,10 +250,9 @@ def create_output_row(row, enable_search, delay):
 
     query = make_search_query(company, city, state, zip_code, country)
     source_url = google_search_url(query)
-
     website = "Needs research"
-    website_source = ""
     results = []
+    page_text = ""
 
     if enable_search and company:
         results = ddg_search_html(query, max_results=8)
@@ -214,23 +261,28 @@ def create_output_row(row, enable_search, delay):
             source_url = website_source
         time.sleep(delay)
 
-    confidence = classify_confidence(company, city, zip_code, country, website, results)
-    sic, naics, lob = classify_sic_naics(company, website)
+    if enable_page_read and website != "Needs research":
+        page_text = read_website_pages(website)
 
-    remarks = "Website finder completed. Address/phone extraction comes in next step."
-    if not enable_search:
-        remarks = "Search disabled. SourceURL is prepared for manual research."
-    elif website == "Needs research":
+    phone = find_phone(page_text) if page_text else "Needs research"
+    address = find_address(page_text, city, state, zip_code, country) if page_text else "Needs research"
+    sic, naics, lob = classify_sic_naics(company, website, page_text)
+    confidence = classify_confidence(company, city, zip_code, country, website, address, phone, results)
+
+    remarks = "Website, phone, and address extraction completed. Review Low/Medium confidence rows."
+    if website == "Needs research":
         remarks = "No reliable website found. Review SourceURL manually."
+    elif address == "Needs research" and phone == "Needs research":
+        remarks = "Website found, but address/phone not extracted. Website may block reading or use images/scripts."
 
     return {
         "Company": company,
-        "Address": "Needs research",
+        "Address": address,
         "City": city or "Needs research",
         "State": state or "Needs research",
         "Zip": zip_code or "Needs research",
         "Country": country or "Needs research",
-        "PhoneResearch": "Needs research",
+        "PhoneResearch": phone,
         "Website": website,
         "SIC": sic,
         "NAICS": naics,
@@ -260,11 +312,11 @@ def rows_to_excel_html(rows):
 with st.sidebar:
     st.header("Settings")
     enable_search = st.checkbox("Enable website finder", value=True)
+    enable_page_read = st.checkbox("Read website/contact pages", value=True)
     delay = st.number_input("Delay per record", min_value=0.0, max_value=5.0, value=0.7, step=0.1)
-    st.caption("Start with 5–20 rows on free Streamlit Cloud.")
+    st.caption("Free Streamlit Cloud: process 5–20 rows first.")
 
 sample_csv = "Company,City,State,Zip,Country\nBoeing,Tanner,AL,35671,USA\nBOEL,Osaka-Shi,,,Japan\n"
-
 uploaded = st.file_uploader("Upload CSV file", type=["csv"])
 
 if uploaded is None:
@@ -285,24 +337,18 @@ else:
         st.subheader("Input preview")
         st.table(input_rows[:10])
 
-        rows_to_process = st.number_input(
-            "Rows to process now",
-            min_value=1,
-            max_value=len(input_rows),
-            value=min(len(input_rows), 10),
-            step=1,
-        )
+        rows_to_process = st.number_input("Rows to process now", 1, len(input_rows), min(len(input_rows), 10), 1)
 
-        if st.button("Run website finder"):
+        if st.button("Run enrichment"):
             progress = st.progress(0)
             status = st.empty()
             output_rows = []
-
             selected_rows = input_rows[:rows_to_process]
+
             for idx, row in enumerate(selected_rows, start=1):
                 company = get_value(row, "Company")
                 status.write(f"Processing {idx}/{len(selected_rows)}: {company}")
-                output_rows.append(create_output_row(row, enable_search, delay))
+                output_rows.append(create_output_row(row, enable_search, enable_page_read, delay))
                 progress.progress(idx / len(selected_rows))
 
             st.success("Done.")
@@ -310,15 +356,10 @@ else:
             st.table(output_rows[:20])
 
             st.download_button("Download CSV", rows_to_csv(output_rows), "company_enrichment_output.csv", "text/csv")
-            st.download_button(
-                "Download Excel-openable XLS",
-                rows_to_excel_html(output_rows),
-                "company_enrichment_output.xls",
-                "application/vnd.ms-excel",
-            )
+            st.download_button("Download Excel-openable XLS", rows_to_excel_html(output_rows), "company_enrichment_output.xls", "application/vnd.ms-excel")
 
     except Exception as e:
         st.error("Error processing CSV")
         st.exception(e)
 
-st.info("Next step after this works: add address and phone extraction from the discovered website.")
+st.info("Next step after this works: add optional Gemini AI enrichment to clean and format the fields more like ChatGPT.")

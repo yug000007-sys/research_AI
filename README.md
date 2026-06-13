@@ -1,6 +1,6 @@
-# Company Enrichment Tool - Step 2 Website Finder
+# Company Enrichment Tool - Step 3 Phone and Address Extraction
 
-Upload CSV, find likely company website using public search, calculate confidence, and download CSV/XLS.
+Upload CSV, find likely company website, read website/contact pages, extract phone/address clues, calculate confidence, and download CSV/XLS.
 
 ## Upload to GitHub root
 
@@ -18,6 +18,6 @@ app.py
 
 Company, City, State, Zip, Country
 
-## Recommended free-tier usage
+## Usage
 
-Start with 5-20 rows. Public search can rate-limit large batches.
+Start with 5-20 rows on free Streamlit Cloud. Public search and website reading can be rate-limited.
