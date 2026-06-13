@@ -1,20 +1,23 @@
-import csv, html, io
-from modules.formatters import normalize_record, clean
+import streamlit as st
 
-FIELDS = ['Company','Address','City','State','Zip','Country','PhoneResearch','Website','SIC','NAICS','NoOfEmployees(This site only)','LineOfBusiness','ParentName','Confidence','SourceURL','Remarks']
+st.set_page_config(page_title="Research AI", layout="wide")
 
-def export_csv(rows):
-    normalized = [normalize_record(dict(row)) for row in rows]
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=FIELDS)
-    writer.writeheader(); writer.writerows(normalized)
-    return output.getvalue().encode('utf-8')
+st.title("Research AI")
+st.success("App is loading correctly now.")
 
-def export_xls(rows):
-    normalized = [normalize_record(dict(row)) for row in rows]
-    table = ['<html><head><meta charset="utf-8"></head><body><table border="1">']
-    table.append('<tr>' + ''.join(f'<th>{html.escape(f)}</th>' for f in FIELDS) + '</tr>')
-    for row in normalized:
-        table.append('<tr>' + ''.join(f'<td>{html.escape(clean(row.get(f, "")))}</td>' for f in FIELDS) + '</tr>')
-    table.append('</table></body></html>')
-    return '\n'.join(table).encode('utf-8')
+company = st.text_input("Company")
+address = st.text_input("Address")
+city = st.text_input("City")
+state = st.text_input("State")
+zip_code = st.text_input("Zip")
+country = st.text_input("Country")
+
+if st.button("Test"):
+    st.write({
+        "Company": company,
+        "Address": address,
+        "City": city,
+        "State": state,
+        "Zip": zip_code,
+        "Country": country,
+    })
